@@ -50,6 +50,7 @@ private:
     double scan_time;
     double range_min;
     double range_max;
+    double topic_lookup_time;
 
     string destination_frame;
     string cloud_destination_topic;
@@ -66,6 +67,7 @@ void LaserscanMerger::reconfigureCallback(laserscan_multi_mergerConfig &config, 
 	this->scan_time = config.scan_time;
 	this->range_min = config.range_min;
 	this->range_max = config.range_max;
+	this->topic_lookup_time = config.topic_lookup_time;
 }
 
 void LaserscanMerger::laserscan_topic_parser()
@@ -102,7 +104,7 @@ void LaserscanMerger::laserscan_topic_parser()
             }
         }
         diff = ros::Time::now() - start_lookup_for_topics;
-        if (tokens.size() != tmp_input_topics.size() && diff.sec > 5.0)
+        if (tokens.size() != tmp_input_topics.size() && diff.sec > topic_lookup_time)
         {
             ROS_WARN("[%s] Couldn't find all laser scans", ros::this_node::getName().c_str());
             for (vector<std::string>::iterator it = missing_topics.begin() ; it != missing_topics.end(); ++it)
@@ -111,7 +113,7 @@ void LaserscanMerger::laserscan_topic_parser()
             }
             ROS_WARN("[%s] Stopped trying", ros::this_node::getName().c_str());
         }
-	} while (tokens.size() != tmp_input_topics.size() && diff.sec <= 5.0);
+	} while (tokens.size() != tmp_input_topics.size() && diff.sec <= topic_lookup_time);
 
 	sort(tmp_input_topics.begin(),tmp_input_topics.end());
 	std::vector<string>::iterator last = std::unique(tmp_input_topics.begin(), tmp_input_topics.end());
@@ -159,6 +161,7 @@ LaserscanMerger::LaserscanMerger()
     nh.param("scan_time", scan_time, 0.0333333);
     nh.param("range_min", range_min, 0.45);
     nh.param("range_max", range_max, 25.0);
+    nh.param("topic_lookup_time", topic_lookup_time, 5.0);
 
     this->laserscan_topic_parser();
 
