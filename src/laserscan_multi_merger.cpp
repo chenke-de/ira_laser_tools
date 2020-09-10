@@ -71,29 +71,47 @@ void LaserscanMerger::reconfigureCallback(laserscan_multi_mergerConfig &config, 
 void LaserscanMerger::laserscan_topic_parser()
 {
 	// LaserScan topics to subscribe
-	ros::Duration(1.5).sleep();
-	ros::master::V_TopicInfo topics;
-	ros::master::getTopics(topics);
-
     istringstream iss(laserscan_topics);
 	vector<string> tokens;
 	copy(istream_iterator<string>(iss), istream_iterator<string>(), back_inserter<vector<string> >(tokens));
 	vector<string> tmp_input_topics;
-	for(int i=0;i<tokens.size();++i)
-	{
-        for(int j=0;j<topics.size();++j)
-		{
-			if( (tokens[i].compare(topics[j].name) == 0) && (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0) )
-			{
-				tmp_input_topics.push_back(topics[j].name);
-			}
-		}
-	}
-        ROS_INFO("topic size %d",tmp_input_topics.size() );
-        for (vector<std::string>::iterator it = tmp_input_topics.begin() ; it != tmp_input_topics.end(); ++it)
-	{
-          ROS_INFO("Subscribed to topic %s", it->c_str());
-	}
+    vector<string> missing_topics;
+	bool found_topic = false;
+    ros::Time start_lookup_for_topics = ros::Time::now();
+    ros::Duration diff;
+
+	do {
+        ros::Duration(0.1).sleep();
+        ros::master::V_TopicInfo topics;
+        ros::master::getTopics(topics);
+        missing_topics.clear();
+        for(int i=0;i<tokens.size();++i)
+        {
+            for(int j=0;j<topics.size();++j)
+            {
+                if( (tokens[i].compare(topics[j].name) == 0) && (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0) )
+                {
+                    tmp_input_topics.push_back(topics[j].name);
+                    found_topic = true;
+                }
+            }
+            if (found_topic == false)
+            {
+                missing_topics.push_back(tokens[i]);
+                found_topic = false;
+            }
+        }
+        diff = ros::Time::now() - start_lookup_for_topics;
+        if (tokens.size() != tmp_input_topics.size() && diff.sec > 5.0)
+        {
+            ROS_WARN("[%s] Couldn't find all laser scans", ros::this_node::getName().c_str());
+            for (vector<std::string>::iterator it = missing_topics.begin() ; it != missing_topics.end(); ++it)
+            {
+                ROS_WARN("[%s] Missing topic %s",ros::this_node::getName().c_str(), it->c_str());
+            }
+            ROS_WARN("[%s] Stopped trying", ros::this_node::getName().c_str());
+        }
+	} while (tokens.size() != tmp_input_topics.size() && diff.sec <= 5.0);
 
 	sort(tmp_input_topics.begin(),tmp_input_topics.end());
 	std::vector<string>::iterator last = std::unique(tmp_input_topics.begin(), tmp_input_topics.end());
