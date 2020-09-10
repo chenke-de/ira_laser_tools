@@ -71,6 +71,7 @@ void LaserscanMerger::reconfigureCallback(laserscan_multi_mergerConfig &config, 
 void LaserscanMerger::laserscan_topic_parser()
 {
 	// LaserScan topics to subscribe
+	ros::Duration(1.5).sleep();
 	ros::master::V_TopicInfo topics;
 	ros::master::getTopics(topics);
 
@@ -87,6 +88,11 @@ void LaserscanMerger::laserscan_topic_parser()
 				tmp_input_topics.push_back(topics[j].name);
 			}
 		}
+	}
+        ROS_INFO("topic size %d",tmp_input_topics.size() );
+        for (vector<std::string>::iterator it = tmp_input_topics.begin() ; it != tmp_input_topics.end(); ++it)
+	{
+          ROS_INFO("Subscribed to topic %s", it->c_str());
 	}
 
 	sort(tmp_input_topics.begin(),tmp_input_topics.end());
