@@ -25,6 +25,7 @@ class LaserscanMerger
 public:
     LaserscanMerger();
     void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan, std::string topic);
+    void pclCallback(const sensor_msgs::PointCloud2::ConstPtr& pcl, std::string topic);
     void pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPointCloud2 *merged_cloud);
     void reconfigureCallback(laserscan_multi_mergerConfig &config, uint32_t level);
 
@@ -42,6 +43,7 @@ private:
     vector<string> input_topics;
 
     void laserscan_topic_parser();
+    void pointcloud_topic_parser();
 
     double angle_min;
     double angle_max;
@@ -51,6 +53,7 @@ private:
     double range_min;
     double range_max;
     double topic_lookup_time;
+    bool merge_pointclouds;
 
     string destination_frame;
     string cloud_destination_topic;
@@ -68,6 +71,7 @@ void LaserscanMerger::reconfigureCallback(laserscan_multi_mergerConfig &config, 
 	this->range_min = config.range_min;
 	this->range_max = config.range_max;
 	this->topic_lookup_time = config.topic_lookup_time;
+    this->merge_pointclouds = config.merge_pointclouds;
 }
 
 void LaserscanMerger::laserscan_topic_parser()
@@ -147,6 +151,84 @@ void LaserscanMerger::laserscan_topic_parser()
 	}
 }
 
+void LaserscanMerger::pointcloud_topic_parser()
+{
+    // LaserScan topics to subscribe
+    istringstream iss(laserscan_topics);
+    vector<string> tokens;
+    copy(istream_iterator<string>(iss), istream_iterator<string>(), back_inserter<vector<string> >(tokens));
+    vector<string> tmp_input_topics;
+    vector<string> missing_topics;
+    bool found_topic = false;
+    ros::Time start_lookup_for_topics = ros::Time::now();
+    ros::Duration diff;
+
+    do {
+        ros::Duration(0.1).sleep();
+        ros::master::V_TopicInfo topics;
+        ros::master::getTopics(topics);
+        missing_topics.clear();
+        for(int i=0;i<tokens.size();++i)
+        {
+            for(int j=0;j<topics.size();++j)
+            {
+                if( (tokens[i].compare(topics[j].name) == 0) && (topics[j].datatype.compare("sensor_msgs/PointCloud2") == 0) )
+                {
+                    tmp_input_topics.push_back(topics[j].name);
+                    found_topic = true;
+                }
+            }
+            if (found_topic == false)
+            {
+                missing_topics.push_back(tokens[i]);
+                found_topic = false;
+            }
+        }
+        diff = ros::Time::now() - start_lookup_for_topics;
+        if (tokens.size() != tmp_input_topics.size() && diff.sec > topic_lookup_time)
+        {
+            ROS_WARN("[%s] Couldn't find all laser scans", ros::this_node::getName().c_str());
+            for (vector<std::string>::iterator it = missing_topics.begin() ; it != missing_topics.end(); ++it)
+            {
+                ROS_WARN("[%s] Missing topic %s",ros::this_node::getName().c_str(), it->c_str());
+            }
+            ROS_WARN("[%s] Stopped trying", ros::this_node::getName().c_str());
+        }
+    } while (tokens.size() != tmp_input_topics.size() && diff.sec <= topic_lookup_time);
+
+    sort(tmp_input_topics.begin(),tmp_input_topics.end());
+    std::vector<string>::iterator last = std::unique(tmp_input_topics.begin(), tmp_input_topics.end());
+    tmp_input_topics.erase(last, tmp_input_topics.end());
+
+
+    // Do not re-subscribe if the topics are the same
+    if( (tmp_input_topics.size() != input_topics.size()) || !equal(tmp_input_topics.begin(),tmp_input_topics.end(),input_topics.begin()))
+    {
+
+        // Unsubscribe from previous topics
+        for(int i=0; i<scan_subscribers.size(); ++i)
+            scan_subscribers[i].shutdown();
+
+        input_topics = tmp_input_topics;
+        if(input_topics.size() > 0)
+        {
+            scan_subscribers.resize(input_topics.size());
+            clouds_modified.resize(input_topics.size());
+            clouds.resize(input_topics.size());
+            ROS_INFO("Subscribing to topics\t%ld", scan_subscribers.size());
+            for(int i=0; i<input_topics.size(); ++i)
+            {
+                scan_subscribers[i] = node_.subscribe<sensor_msgs::PointCloud2> (input_topics[i].c_str(), 1, boost::bind(&LaserscanMerger::pclCallback,this, _1, input_topics[i]));
+                clouds_modified[i] = false;
+                cout << input_topics[i] << " ";
+            }
+        }
+        else
+            ROS_INFO("Not subscribed to any topic.");
+    }
+}
+
+
 LaserscanMerger::LaserscanMerger()
 {
 	ros::NodeHandle nh("~");
@@ -162,8 +244,15 @@ LaserscanMerger::LaserscanMerger()
     nh.param("range_min", range_min, 0.45);
     nh.param("range_max", range_max, 25.0);
     nh.param("topic_lookup_time", topic_lookup_time, 5.0);
+    nh.param("merge_pointclouds", merge_pointclouds, true);
 
-    this->laserscan_topic_parser();
+    if (merge_pointclouds == true)
+    {
+        this->pointcloud_topic_parser();
+    } else {
+        this->laserscan_topic_parser();
+    }
+
 
 	point_cloud_publisher_ = node_.advertise<sensor_msgs::PointCloud2> (cloud_destination_topic.c_str(), 1, false);
 	laser_scan_publisher_ = node_.advertise<sensor_msgs::LaserScan> (scan_destination_topic.c_str(), 1, false);
@@ -210,14 +299,108 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
 			pcl::concatenatePointCloud(merged_cloud, clouds[i], merged_cloud);
 			clouds_modified[i] = false;
 		}
-	
-		point_cloud_publisher_.publish(merged_cloud);
+
+        merged_cloud.fields.resize(5);
+        merged_cloud.fields[0].name = "x";
+        merged_cloud.fields[0].offset = 0;
+        merged_cloud.fields[0].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[0].count = 1;
+        merged_cloud.fields[1].name = "y";
+        merged_cloud.fields[1].offset = 4;
+        merged_cloud.fields[1].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[1].count = 1;
+        merged_cloud.fields[2].name = "z";
+        merged_cloud.fields[2].offset = 8;
+        merged_cloud.fields[2].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[2].count = 1;
+        merged_cloud.fields[3].name = "intensity";
+        merged_cloud.fields[3].offset = 16;
+        merged_cloud.fields[3].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[3].count = 1;
+        merged_cloud.fields[4].name = "ring";
+        merged_cloud.fields[4].offset = 20;
+        merged_cloud.fields[4].datatype = sensor_msgs::PointField::UINT16;
+        merged_cloud.fields[4].count = 1;
+
+        point_cloud_publisher_.publish(merged_cloud);
 
 		Eigen::MatrixXf points;
 		getPointCloudAsEigen(merged_cloud,points);
 
 		pointcloud_to_laserscan(points, &merged_cloud);
 	}
+}
+
+void LaserscanMerger::pclCallback(const sensor_msgs::PointCloud2::ConstPtr& pcl, std::string topic)
+{
+    sensor_msgs::PointCloud tmpCloud1,tmpCloud2;
+    sensor_msgs::PointCloud2 tmpCloud3;
+
+    // Verify that TF knows how to transform from the received scan to the destination scan frame
+    tfListener_.waitForTransform(pcl->header.frame_id.c_str(), destination_frame.c_str(), pcl->header.stamp, ros::Duration(1));
+    sensor_msgs::convertPointCloud2ToPointCloud(*pcl, tmpCloud1);
+    try
+    {
+        tfListener_.transformPointCloud(destination_frame.c_str(), tmpCloud1, tmpCloud2);
+    }catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
+
+    for(int i=0; i<input_topics.size(); ++i)
+    {
+        if(topic.compare(input_topics[i]) == 0)
+        {
+            sensor_msgs::convertPointCloudToPointCloud2(tmpCloud2,tmpCloud3);
+            pcl_conversions::toPCL(tmpCloud3, clouds[i]);
+            clouds_modified[i] = true;
+        }
+    }
+
+    // Count how many pcls we have
+    int totalClouds = 0;
+    for(int i=0; i<clouds_modified.size(); ++i)
+        if(clouds_modified[i])
+            ++totalClouds;
+
+    // Go ahead only if all subscribed scans have arrived
+    if(totalClouds == clouds_modified.size())
+    {
+        pcl::PCLPointCloud2 merged_cloud = clouds[0];
+        clouds_modified[0] = false;
+
+        for(int i=1; i<clouds_modified.size(); ++i)
+        {
+            pcl::concatenatePointCloud(merged_cloud, clouds[i], merged_cloud);
+            clouds_modified[i] = false;
+        }
+
+        merged_cloud.fields.resize(5);
+        merged_cloud.fields[0].name = "x";
+        merged_cloud.fields[0].offset = 0;
+        merged_cloud.fields[0].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[0].count = 1;
+        merged_cloud.fields[1].name = "y";
+        merged_cloud.fields[1].offset = 4;
+        merged_cloud.fields[1].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[1].count = 1;
+        merged_cloud.fields[2].name = "z";
+        merged_cloud.fields[2].offset = 8;
+        merged_cloud.fields[2].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[2].count = 1;
+        merged_cloud.fields[3].name = "intensity";
+        merged_cloud.fields[3].offset = 16;
+        merged_cloud.fields[3].datatype = sensor_msgs::PointField::FLOAT32;
+        merged_cloud.fields[3].count = 1;
+        merged_cloud.fields[4].name = "ring";
+        merged_cloud.fields[4].offset = 20;
+        merged_cloud.fields[4].datatype = sensor_msgs::PointField::UINT16;
+        merged_cloud.fields[4].count = 1;
+
+        point_cloud_publisher_.publish(merged_cloud);
+
+        Eigen::MatrixXf points;
+        getPointCloudAsEigen(merged_cloud,points);
+
+        pointcloud_to_laserscan(points, &merged_cloud);
+    }
 }
 
 void LaserscanMerger::pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPointCloud2 *merged_cloud)
