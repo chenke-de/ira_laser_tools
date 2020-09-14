@@ -300,28 +300,6 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
 			clouds_modified[i] = false;
 		}
 
-        merged_cloud.fields.resize(5);
-        merged_cloud.fields[0].name = "x";
-        merged_cloud.fields[0].offset = 0;
-        merged_cloud.fields[0].datatype = sensor_msgs::PointField::FLOAT32;
-        merged_cloud.fields[0].count = 1;
-        merged_cloud.fields[1].name = "y";
-        merged_cloud.fields[1].offset = 4;
-        merged_cloud.fields[1].datatype = sensor_msgs::PointField::FLOAT32;
-        merged_cloud.fields[1].count = 1;
-        merged_cloud.fields[2].name = "z";
-        merged_cloud.fields[2].offset = 8;
-        merged_cloud.fields[2].datatype = sensor_msgs::PointField::FLOAT32;
-        merged_cloud.fields[2].count = 1;
-        merged_cloud.fields[3].name = "intensity";
-        merged_cloud.fields[3].offset = 16;
-        merged_cloud.fields[3].datatype = sensor_msgs::PointField::FLOAT32;
-        merged_cloud.fields[3].count = 1;
-        merged_cloud.fields[4].name = "ring";
-        merged_cloud.fields[4].offset = 20;
-        merged_cloud.fields[4].datatype = sensor_msgs::PointField::UINT16;
-        merged_cloud.fields[4].count = 1;
-
         point_cloud_publisher_.publish(merged_cloud);
 
 		Eigen::MatrixXf points;
